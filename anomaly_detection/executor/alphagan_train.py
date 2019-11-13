@@ -23,8 +23,6 @@ def _train(nb_epochs, weight, logname):
     # Data features
     len_data = 184
 
-    global_step = tf.Variable(0, name='global_step', trainable=False)
-
     # Placeholder
     x_pl = tf.placeholder(tf.float32, shape=[None, len_data, 1], name="input_x")
     z_pl = tf.placeholder(tf.float32, shape=[None, latent_dim], name="input_z")
@@ -62,14 +60,42 @@ def _train(nb_epochs, weight, logname):
 
     # Loss
     with tf.name_scope("loss_function"):
-        reconstruction_loss = reconstruction_loss_weight * tf.reduce_mean(tf.abs(x_pl - rec_x))
-        generator_loss = tf.reduce_mean(-tf.log(y_fake + EPS))
-        discriminator_loss = -tf.reduce_mean(tf.log(y_real + EPS)) - tf.reduce_mean(tf.log(1 - y_fake + EPS))
-        code_discriminator_loss = -tf.reduce_mean(tf.log(c_real + EPS)) - tf.reduce_mean(tf.log(1 - c_fake + EPS))
-        code_generator_loss = tf.reduce_mean(-tf.log(c_fake + EPS))
+        # Generator loss
+        gen_real_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=y_real, labels=tf.ones_like(y_real)))
+        gen_fake_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=y_fake, labels=tf.ones_like(y_fake)))
+        generator_loss = gen_real_loss + gen_fake_loss
+        # generator_loss = tf.reduce_mean(-tf.log(y_fake + EPS))
 
-        # loss for autoencoder
+        reconstruction_loss = reconstruction_loss_weight * tf.reduce_mean(tf.abs(x_pl - rec_x))
+        code_generator_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=c_fake, labels=tf.ones_like(c_fake)))
+        # code_generator_loss = tf.reduce_mean(-tf.log(c_fake + EPS))
+
+        # Autoencoder loss
         encoder_generator_loss = reconstruction_loss + generator_loss + code_generator_loss
+
+        # Discriminator loss
+        d_real_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=y_real, labels=tf.zeros_like(y_real)))
+        d_fake_loss = tf.reduce_mean(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=y_fake, labels=tf.zeros_like(y_fake)))
+        discriminator_loss = d_real_loss + d_fake_loss
+        # discriminator_loss = -tf.reduce_mean(tf.log(y_real + EPS)) - tf.reduce_mean(tf.log(1 - y_fake + EPS))
+
+        # Code discriminator loss
+        c_real_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=c_real, labels=tf.ones_like(c_real))
+        c_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=c_fake, labels=tf.zeros_like(c_fake))
+        code_discriminator_loss = tf.reduce_mean(c_real_loss) + tf.reduce_mean(c_fake_loss)
+        # code_discriminator_loss = -tf.reduce_mean(tf.log(c_real + EPS)) - tf.reduce_mean(tf.log(1 - c_fake + EPS))
 
     # Optimizer
     with tf.name_scope('optimizers'):
@@ -130,21 +156,20 @@ def _train(nb_epochs, weight, logname):
             score_l2 = tf.norm(rec, ord=2, axis=1,
                                keep_dims=False, name='d_loss')
             score_l2 = tf.squeeze(score_l2, name="score_l2")
-                                                                                                    
+
     sv = tf.train.Supervisor(logdir=logdir)
     sess_config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
     with sv.managed_session(config=sess_config) as sess:
         writer = tf.summary.FileWriter(logdir, sess.graph)
-        train_batch = 0
         epoch = 0
 
         train_x = common.load_data(split="train", length_data=len_data)
-        nr_batches = len(train_x)//batch_size
-        
+        steps_per_epoch = len(train_x)//batch_size
+
         while epoch < nb_epochs:
-            print("epoch{} ".format(epoch))
-            #lr_decay = (epoch//(nb_epochs/3))*0.75
+            print("epoch:{} ".format(epoch))
+            # lr_decay = (epoch//(nb_epochs/3))*0.75
             lr_decay = 1
             lr = starting_lr * lr_decay
 
@@ -153,13 +178,15 @@ def _train(nb_epochs, weight, logname):
 
             train_loss_dis, train_loss_gen_enc, train_loss_code_dis = [0, 0, 0]
 
-            for t in range(nr_batches):
+            for t in range(steps_per_epoch):
                 batch_x = train_x[t*batch_size:(t+1)*batch_size]
 
                 feed_dict = {x_pl: batch_x,
-                             z_pl: np.random.normal(size=[batch_size, latent_dim]),
+                             z_pl: np.random.normal(
+                                 size=[batch_size, latent_dim]),
                              is_training_pl: True,
                              learning_rate_pl: lr}
+
                 # ---------------------------------------------------
                 _, eg_loss = sess.run([encoder_generator_opt, encoder_generator_loss], feed_dict=feed_dict)
                 _, eg_loss = sess.run([encoder_generator_opt, encoder_generator_loss], feed_dict=feed_dict)
@@ -172,15 +199,13 @@ def _train(nb_epochs, weight, logname):
                 train_loss_gen_enc += eg_loss
                 train_loss_code_dis += c_loss
 
-                print("dis loss = ", train_loss_dis)
-                print("gen enc loss = ", train_loss_gen_enc)
                 if t % 100 == 0:
                     sm = sess.run(sum_op, feed_dict=feed_dict)
-                    writer.add_summary(sm, epoch*nr_batches+t)
+                    writer.add_summary(sm, epoch*steps_per_epoch+t)
 
-            train_loss_gen_enc /= nr_batches
-            train_loss_code_dis /= nr_batches
-            train_loss_dis /= nr_batches
+            train_loss_gen_enc /= steps_per_epoch
+            train_loss_code_dis /= steps_per_epoch
+            train_loss_dis /= steps_per_epoch
 
             epoch += 1
 

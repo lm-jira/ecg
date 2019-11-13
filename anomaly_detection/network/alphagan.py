@@ -172,11 +172,12 @@ def discriminator(x_inp, is_training, reuse=False):
         y = tf.layers.dropout(y, rate=0.5, name='dropout',
                               training=is_training)
 
-        logits = tf.layers.dense(y,
-                                 1,
-                                 kernel_initializer=init_kernel,
-                                 name='fc2')
-    return logits
+        y = tf.layers.dense(y,
+                            1,
+                            kernel_initializer=init_kernel,
+                            name='fc2')
+        y = tf.sigmoid(y)
+    return y
 
 
 def code_discriminator(z_inp, reuse=False):
